@@ -1,13 +1,6 @@
-# File: App/ui_game_actions.py | Created/Modified: 2026-02-26
 # Copyright 2025 H2so4 Consulting LLC
-"""User actions for PuzzleGame.
-
-Includes:
-- selection toggle
-- submit/check logic (no strikes)
-- right-click flag menu (Inappropriate/Wrong Category/Too Hard/Too Ambiguous)
-- play again / quit
-"""
+# File: App/ui_game_actions.py
+# This module implements user actions for the PuzzleGame UI.
 
 from __future__ import annotations
 
@@ -19,6 +12,32 @@ from .ui_game_render import refresh_tile_visuals, fmt_tile, render_board
 from .ui_game_hints import clear_hint_selection
 
 
+# This gets the category string for a given word, if known. (Start)
+def _category_for_word(game, word: str) -> str:
+    word_n = normalize_token(word or "")
+    if not word_n:
+        return ""
+    # end if
+
+    g = getattr(game, "group_by_word", {}).get(word)
+    if isinstance(g, dict):
+        return g.get("category", "") or ""
+    # end if
+
+    # Fallback: scan groups. (Start)
+    for grp in getattr(game, "groups", []) or []:
+        try:
+            if word in grp.get("words", []):
+                return grp.get("category", "") or ""
+            # end if
+        except Exception:
+            continue
+        # end try/except
+    # end for
+
+    return ""
+# end def _category_for_word  # _category_for_word
+
 
 # This opens the right-click flag menu for a specific word. (Start)
 def _open_flag_menu(game, event, word: str) -> None:
@@ -27,12 +46,13 @@ def _open_flag_menu(game, event, word: str) -> None:
         return
     # end if
 
-    menu = tk.Menu(game.root, tearoff=0)
+    category = _category_for_word(game, word)
 
+    menu = tk.Menu(game.root, tearoff=0)
     menu.add_command(label="Inappropriate", command=lambda: _flag_inappropriate(game, word))
-    menu.add_command(label="Wrong Category", command=lambda: _flag_wrong_category(game, word))
+    menu.add_command(label="Wrong Category", command=lambda: _flag_wrong_category(game, category, word))
     menu.add_command(label="Too Hard", command=lambda: _flag_too_hard(game, word))
-    menu.add_command(label="Too Ambiguous", command=lambda: _flag_too_ambiguous(game, word))
+    menu.add_command(label="Too Ambiguous", command=lambda: _flag_too_ambiguous(game, category, word))
 
     try:
         menu.tk_popup(event.x_root, event.y_root)
@@ -110,6 +130,7 @@ def check_selection(game) -> None:
                     pass
                 # end try/except
             # end if
+
             return
         # end if
     # end for
@@ -120,8 +141,6 @@ def check_selection(game) -> None:
     refresh_tile_visuals(game)
 # end def check_selection  # check_selection
 
-
-# This shows a right-click context menu allowing flagging. (Start)
 
 # This flags a word as inappropriate for the current user. (Start)
 def _flag_inappropriate(game, word: str) -> None:
@@ -143,6 +162,7 @@ def _flag_wrong_category(game, category: str, word: str) -> None:
         messagebox.showwarning("Flag", "Unknown category for this tile.", parent=game.root)
         return
     # end if
+
     game.db.flag_wrong_category(category, word)
     messagebox.showinfo("Flagged", f"Wrong category:\n{fmt_tile(word)}\nCategory: {category}", parent=game.root)
 # end def _flag_wrong_category  # _flag_wrong_category
@@ -154,6 +174,7 @@ def _flag_too_ambiguous(game, category: str, word: str) -> None:
         messagebox.showwarning("Flag", "Unknown category for this tile.", parent=game.root)
         return
     # end if
+
     game.db.flag_too_ambiguous(category, word)
     messagebox.showinfo("Flagged", f"Too ambiguous:\n{fmt_tile(word)}\nCategory: {category}", parent=game.root)
 # end def _flag_too_ambiguous  # _flag_too_ambiguous

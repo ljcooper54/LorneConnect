@@ -2,11 +2,16 @@
 # Copyright 2025 H2so4 Consulting LLC
 """Game UI entry point.
 
-This file now only contains the PuzzleGame class wiring.
-Heavy logic is split into:
+Puzzle UI wiring for Connections-style game.
+
+Logic split into:
 - ui_game_render.py (rendering + visuals + formatting)
 - ui_game_actions.py (toggle/check/right-click flag menu)
 - ui_game_hints.py (progressive hint logic)
+
+Key fix:
+- Restart now REBUILDS the solved/grid/controls frames to avoid macOS/Tk geometry caching
+  that can leave vertical space reserved after a completed game.
 """
 
 from __future__ import annotations
@@ -65,7 +70,7 @@ class PuzzleGame:
         self.groups = puzzle_data["groups"]
         self.selected_subjects = list(puzzle_data.get("_selected_subjects") or [])
 
-        # This preserves the original 4-subject selection for reliable restart. (Start)
+        # Preserve the original 4-subject selection for reliable restart. (Start)
         if self.selected_subjects:
             self.base_subjects = list(self.selected_subjects)
         else:
@@ -96,14 +101,31 @@ class PuzzleGame:
         # Root frame. (Start)
         self.frame = tk.Frame(root)
         self.frame.pack(padx=20, pady=20)
-        try:
-            self.frame.pack_propagate(True)
-        except Exception:
-            pass
-        # end try/except
+        # end root frame
 
         self.status = tk.Label(self.frame, text="Select 4 words, then Submit.")
         self.status.pack(pady=(0, 10))
+
+        # Build the main UI subframes. (Start)
+        self._build_subframes()
+        # end build subframes
+
+        render_board(self)
+    # end def __init__  # __init__
+
+    # This creates solved/grid/control frames fresh. (Start)
+    def _build_subframes(self) -> None:
+        # Destroy any existing subframes (restart path). (Start)
+        for attr in ("solved_frame", "grid_frame", "controls_frame"):
+            fr = getattr(self, attr, None)
+            if fr is not None:
+                try:
+                    fr.destroy()
+                except Exception:
+                    pass
+                # end try/except
+            # end if
+        # end for
 
         self.solved_frame = tk.Frame(self.frame)
         self.solved_frame.pack()
@@ -111,29 +133,26 @@ class PuzzleGame:
         self.grid_frame = tk.Frame(self.frame)
         self.grid_frame.pack()
 
-        controls = tk.Frame(self.frame)
-        controls.pack(pady=10)
+        self.controls_frame = tk.Frame(self.frame)
+        self.controls_frame.pack(pady=10)
 
-        self.submit_btn = tk.Button(controls, text="Submit", command=self.check)
+        self.submit_btn = tk.Button(self.controls_frame, text="Submit", command=self.check)
         self.submit_btn.pack(side=tk.LEFT, padx=6)
 
-        self.hint_btn = tk.Button(controls, text="Hint", command=self.hint)
+        self.hint_btn = tk.Button(self.controls_frame, text="Hint", command=self.hint)
         self.hint_btn.pack(side=tk.LEFT, padx=6)
 
-        self.restart_btn = tk.Button(controls, text="Restart", command=self.restart_clicked)
+        self.restart_btn = tk.Button(self.controls_frame, text="Restart", command=self.restart_clicked)
         self.restart_btn.pack(side=tk.LEFT, padx=6)
 
-        self.quit_btn = tk.Button(controls, text="Quit", command=self.quit_game)
+        self.quit_btn = tk.Button(self.controls_frame, text="Quit", command=self.quit_game)
         self.quit_btn.pack(side=tk.LEFT, padx=6)
-        # end root frame
 
         # Tiles. (Start)
         self.tile_widgets: list[tk.Label] = []
         self.tile_base_bg: dict[int, str] = {}
         # end tiles
-
-        render_board(self)
-    # end def __init__  # __init__
+    # end def _build_subframes  # _build_subframes
 
     # This toggles tile selection. (Start)
     def toggle(self, idx: int) -> None:
@@ -223,15 +242,7 @@ class PuzzleGame:
             subjects.append("Surprise Me!")
         # end while
 
-        # Hard reset all state that influences rendering before regeneration. (Start)
-        self.groups = []
-        self.group_by_word = {}
-        self.unsolved_words = []
-        self.tile_widgets = []
-        self.tile_base_bg = {}
-        # end hard reset
-
-        # Reset state so we always get a full 4x4 board. (Start)
+        # Reset state. (Start)
         self.selected_idxs = set()
         self.hint_category_key = None
         self.hint_progress_count = 0
@@ -272,12 +283,25 @@ class PuzzleGame:
         # end for
         self.unsolved_words = list(all_words)
 
+        # Rebuild the subframes to ensure no stale geometry is reserved. (Start)
+        self._build_subframes()
+        # end rebuild subframes
+
         render_board(self)
+
+        # Aggressively fit window to requested size (macOS Tk can retain old height). (Start)
         try:
-            self.root.geometry("")
+            self.root.update_idletasks()
+            req_w = self.frame.winfo_reqwidth() + 40
+            req_h = self.frame.winfo_reqheight() + 40
+            self.root.minsize(1, 1)
+            if req_w > 50 and req_h > 50:
+                self.root.geometry(f"{req_w}x{req_h}")
+            # end if
         except Exception:
             pass
-        # end try/except
+        # end fit geometry  # fit_geometry
+
         self.status.config(text="Restarted. Select 4 words, then Submit.")
     # end def _restart_same_categories  # _restart_same_categories
 

@@ -161,10 +161,26 @@ def render_board(game) -> None:
     # end grid
 
     refresh_tile_visuals(game)
-    game.root.update_idletasks()
+
+    # Force the toplevel to shrink to content (macOS Tk often won't shrink with geometry("")). (Start)
     try:
-        game.root.geometry("")
+        game.root.update_idletasks()
+        # Remove any previous minsize constraints that could pin the old (taller) solved-area height. (Start)
+        try:
+            game.root.minsize(1, 1)
+        except Exception:
+            pass
+        # end minsize reset
+
+        req_w = game.root.winfo_reqwidth()
+        req_h = game.root.winfo_reqheight()
+        if req_w > 50 and req_h > 50:
+            game.root.geometry(f"{req_w}x{req_h}")
+        # end if
+
+        game.root.update_idletasks()
     except Exception:
         pass
-    # end try/except
+    # end force-shrink  # force_shrink
+
 # end def render_board  # render_board
