@@ -11,11 +11,15 @@ EXCLUDE_LAST_N = 25
 
 DEBUG_LOG_FILE = "openai_raw_debug.log"
 
-# Enable verbose OpenAI logging when env CONNECTION_DEBUG=True or CONNECTIONS_DEBUG=True
-CONNECTION_DEBUG = (
-    os.environ.get("CONNECTION_DEBUG", os.environ.get("CONNECTIONS_DEBUG", "False")).lower()
-    in ("1","true","yes","y")
-)
+def _env_flag(name: str, default: bool = False) -> bool:
+    """Return boolean from environment variable."""
+    val = os.environ.get(name)
+    if val is None:
+        return default
+    val = val.strip().lower()
+    return val not in ("0", "false", "no", "off", "")
+
+CONNECTION_DEBUG = _env_flag("DEBUG", False)
 
 DEBUG_USERNAME = None
 

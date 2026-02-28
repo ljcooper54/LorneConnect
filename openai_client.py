@@ -1,14 +1,78 @@
+# File: App/openai_client.py | Created/Modified: 2026-02-25
 # Copyright 2025 H2so4 Consulting LLC
-"""OpenAI client wrapper."""
+"""OpenAI client wrapper for category seeding.
 
-import json
-import re
-import time
+This module only handles the category-seeding call (new category -> 100 words).
+All normal puzzle generation should be local DB-driven and MUST NOT call OpenAI.
+"""
+
+from __future__ import annotations
+
+import os
+from typing import Iterable
 
 from openai import OpenAI
 
-from .constants import DEBUG_LOG_FILE, DEBUG_USERNAME
-from .debug import debug_log_openai
-from .utils import normalize_token, is_single_token
 
+# This OpenAIClient wraps the OpenAI SDK with a narrow API. (Start)
+class OpenAIClient:
+    """Thin wrapper around OpenAI for category seeding."""
 
+    # This initializes the OpenAI SDK client and checks for API key. (Start)
+    def __init__(self):
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY not set.")
+        # end if
+        self._client = OpenAI(api_key=api_key)
+    # end def __init__  # __init__
+
+    # This asks OpenAI for additional unique seed items for a category as strict JSON. (Start)
+    def generate_category_seed(self, category: str, exclude_words: list[str], target_count: int) -> str:
+        """
+        Returns a JSON *string* with schema:
+        {
+          "category": "<string>",
+          "items": [{"word":"...", "obscurity":1..4}, ...]
+        }
+        """
+        # Keep request sizes sane; ask for up to 100 at a time, accumulate via retries.
+        n = max(20, min(int(target_count), 100))
+
+        # We tell the model it is allowed to return FEWER than n if it cannot find unique terms.
+        # The seeder will retry and/or accept MIN_ACCEPTABLE.
+        exclude_preview = ", ".join(exclude_words[:100])
+
+        prompt = f"""
+You are generating seed vocabulary for a word-grouping game.
+
+Category: "{category}"
+
+Goal: Produce up to {n} UNIQUE words/phrases strongly associated with the category.
+Each item must include obscurity (1=very common, 4=very obscure).
+
+Hard constraints:
+- Output MUST be valid JSON (no markdown, no commentary).
+- Root object: keys "category" and "items".
+- "items" is an array of objects: {{"word": <string>, "obscurity": <int 1-4>}}.
+- DO NOT repeat any "word" inside this response.
+- DO NOT include any word that matches (case/whitespace-insensitive) any of these excluded tokens:
+  [{exclude_preview}]
+- Prefer domain-specific terms. Avoid generic fillers (e.g., "salad", "pasta") unless genuinely category-specific.
+- If you cannot find {n} unique items, return fewer rather than repeating.
+
+Return ONLY the JSON object.
+""".strip()
+
+        # Use a deterministic temperature to reduce weirdness.
+        resp = self._client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+        )
+
+        text = resp.choices[0].message.content or ""
+        return text
+    # end def generate_category_seed  # generate_category_seed
+
+# end class OpenAIClient  # OpenAIClient
