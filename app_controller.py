@@ -163,7 +163,36 @@ class App:
                     self.seeder.ensure_category_playable(user=user, category=s, progress_cb=progress_cb)
                 # end for
 
-                puzzle = self.generator.generate(user, selected_subjects, [])
+                puzzle = self.generator.generate(user, selected_subjects, recent_n=0)
+                # Normalize older generator payloads (rows->groups). (Start)
+                if isinstance(puzzle, dict) and "groups" not in puzzle and "rows" in puzzle:
+                    puzzle["groups"] = puzzle.get("rows")
+                # end normalize
+
+                # Retry a few times if generator returns an incomplete puzzle. (Start)
+                attempts_left = 2
+                while True:
+                    groups = puzzle.get("groups") if isinstance(puzzle, dict) else None
+                    ok = (
+                        isinstance(groups, list)
+                        and len(groups) == 4
+                        and all(isinstance(g, dict) and isinstance(g.get("words"), list) and len(g.get("words")) == 4 for g in groups)
+                    )
+                    if ok:
+                        break
+                    # end if
+
+                    if attempts_left <= 0:
+                        raise RuntimeError(f"Generator returned invalid groups (need 4x4). Got: {repr(puzzle)[:1200]}")
+                    # end if
+
+                    attempts_left -= 1
+                    puzzle = self.generator.generate(user, selected_subjects, recent_n=0)
+                    if isinstance(puzzle, dict) and "groups" not in puzzle and "rows" in puzzle:
+                        puzzle["groups"] = puzzle.get("rows")
+                    # end if
+                # end while
+                # end retry
                 q.put(("ok", puzzle))
             except CategoryTooNarrowError as e:
                 q.put(("too_narrow", e))
@@ -236,11 +265,6 @@ class App:
 
             subject_window.destroy()
             self._clear_frames()
-            try:
-                puzzle["_selected_subjects"] = list(selected_subjects)
-            except Exception:
-                pass
-            # end try/except
             PuzzleGame(self.root, user, self.db, self.generator, puzzle, self.on_done)
         # end def poll  # poll
 

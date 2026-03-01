@@ -69,6 +69,16 @@ class DBPicks:
         # end with
     # end def get_last_n_picks  # get_last_n_picks
 
+    def get_recent_words(self, user: str, limit: int = 10):
+        rows = self.conn.execute("""
+            SELECT word
+            FROM word_picks
+            WHERE user = ?
+            ORDER BY picked_at DESC
+            LIMIT ?
+        """, (user, limit)).fetchall()
+        return [r["word"] for r in rows]
+
     # This records picked words for a user+category. (Start)
     def record_picks(self, user: str, category: str, words: Iterable[str]) -> None:
         self._ensure_word_picks_schema()

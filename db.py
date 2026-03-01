@@ -38,3 +38,28 @@ class DB(
     # end def __init__  # __init__
 
 # end class DB  # DB
+
+    # This decrements effective obscurity for a user-word pair. (Start)
+    def decrement_obscurity_for_user(self, user: str, word: str) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO user_word_flags(user, word, obscurity_adjust)
+            VALUES (?, ?, -1)
+            ON CONFLICT(user, word)
+            DO UPDATE SET obscurity_adjust =
+                user_word_flags.obscurity_adjust - 1
+            """,
+            (user, word),
+        )
+        self.conn.commit()
+    # end def decrement_obscurity_for_user
+
+    # This returns obscurity adjustment for a user-word pair. (Start)
+    def get_user_obscurity_adjust(self, user: str, word: str) -> int:
+        row = self.conn.execute(
+            "SELECT obscurity_adjust FROM user_word_flags WHERE user=? AND word=?",
+            (user, word),
+        ).fetchone()
+        return int(row[0]) if row else 0
+    # end def get_user_obscurity_adjust
+
