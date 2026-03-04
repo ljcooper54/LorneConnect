@@ -16,8 +16,9 @@ Also:
 
 from __future__ import annotations
 
-import random
+from .tile_text import tile_display_words
 import tkinter as tk
+import random
 
 from .utils import split_camel_case_display
 
@@ -76,6 +77,36 @@ def render_board(game) -> None:
     game.tile_widgets = []
     game.tile_base_bg = {}
 
+    # Build per-word display labels (minimized) for this puzzle. (Start)
+    display_by_word: dict[str, str] = {}
+    for g in game.groups:
+        words = list(g.get("words", []))
+        if len(words) != 4:
+            continue
+        d1, d2, d3, d4 = tile_display_words(g.get("category", ""), words[0], words[1], words[2], words[3])
+        display_by_word[words[0]] = d1
+        display_by_word[words[1]] = d2
+        display_by_word[words[2]] = d3
+        display_by_word[words[3]] = d4
+    # end build display labels  # display_by_word
+
+    # Collision handling: revert colliding display strings to the original raw token. (Start)
+    key_to_words: dict[str, list[str]] = {}
+    for raw, disp in display_by_word.items():
+        k = (disp or "").strip().casefold()
+        key_to_words.setdefault(k, []).append(raw)
+    # end for
+
+    for k, raws in key_to_words.items():
+        if not k:
+            continue
+        if len(raws) > 1:
+            for raw in raws:
+                display_by_word[raw] = raw
+            # end for
+    # end for
+    # end collision handling  # collisions
+
     # Solved rows. (Start)
     for g in game.solved_groups:
         row = tk.Frame(game.solved_frame)
@@ -91,7 +122,7 @@ def render_board(game) -> None:
         for wtxt in g["words"]:
             lbl = tk.Label(
                 tiles_row,
-                text=fmt_tile(wtxt),
+                text=fmt_tile(display_by_word.get(wtxt, wtxt)),
                 width=20,
                 height=2,
                 bg=bg,
@@ -127,7 +158,7 @@ def render_board(game) -> None:
         # Inner label for the text; padding creates a constant border thickness. (Start)
         inner = tk.Label(
             border,
-            text=fmt_tile(wtxt),
+            text=fmt_tile(display_by_word.get(wtxt, wtxt)),
             width=20,
             height=2,
             bg=game.TILE_BG,

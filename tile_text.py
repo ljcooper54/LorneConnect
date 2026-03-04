@@ -1,5 +1,5 @@
 # Copyright 2025 H2so4 Consulting LLC
-# 2026-03-03: Deterministic trimming: always strip leading 'The'; strip only proper-noun anchors from category; contract category=dict with TypeError otherwise.
+# 2026-03-03: Word minimization for tile display: per-category API returning 4 display strings; caller handles collisions.
 
 from __future__ import annotations
 
@@ -31,6 +31,7 @@ _GENERIC_CATEGORY_SUFFIX = {
 }
 
 
+# Normalize a string for token comparisons. (Start)
 def _norm(s: str) -> str:
     s = (s or "").strip().lower()
     s = s.replace("’", "'")
@@ -38,8 +39,10 @@ def _norm(s: str) -> str:
     s = s.translate(str.maketrans({ch: " " for ch in punct}))
     s = re.sub(r"\s+", " ", s).strip()
     return s
+# end _norm
 
 
+# Convert a string to comparable tokens, handling possessives. (Start)
 def _tokens(s: str) -> list[str]:
     tks = _norm(s).split()
     out: list[str] = []
@@ -48,24 +51,16 @@ def _tokens(s: str) -> list[str]:
             t = t[:-2]
         out.append(t)
     return [t for t in out if t]
+# end _tokens
 
 
-def _extract_category_name(category: dict) -> str:
-    if not isinstance(category, dict):
-        raise TypeError(f"category must be dict, got {type(category).__name__}")
+# Build category anchors from a category name. (Start)
+def _anchors_from_name(category_name: str) -> list[list[str]]:
+    cat = (category_name or "").strip()
+    if not cat:
+        return []
 
-    for k in ("category", "name", "title", "display_name"):
-        v = category.get(k)
-        if isinstance(v, str) and v.strip():
-            return v
-
-    raise ValueError("category dict does not contain a usable category name")
-
-
-def _anchors(category: dict) -> list[list[str]]:
-    cat = _extract_category_name(category)
     # Only use proper-noun-ish anchors: significant tokens from the category name.
-    # We treat title-cased category words as candidates but filter common/generic words.
     words = re.findall(r"[A-Za-z']+", cat.replace("’", "'"))
     anchors: list[list[str]] = []
     for w in words:
@@ -92,8 +87,10 @@ def _anchors(category: dict) -> list[list[str]]:
             dedup.append(a)
     dedup.sort(key=len, reverse=True)
     return dedup
+# end _anchors_from_name
 
 
+# Decide if a remainder is specific enough to be useful. (Start)
 def _remainder_ok(rest: str) -> bool:
     rest_norm = _norm(rest)
     if not rest_norm:
@@ -109,12 +106,11 @@ def _remainder_ok(rest: str) -> bool:
     if len(single) < 6:
         return False
     return True
+# end _remainder_ok
 
 
-def tile_display_text(category: dict, raw_word: str) -> str:
-    if not isinstance(category, dict):
-        raise TypeError(f"category must be dict, got {type(category).__name__}")
-
+# Compute a minimized display string for a single raw token. (Start)
+def _tile_display_single(category_name: str, raw_word: str) -> str:
     raw = (raw_word or "").strip()
     if not raw:
         return raw
@@ -132,9 +128,9 @@ def tile_display_text(category: dict, raw_word: str) -> str:
         rest = " ".join(raw.split()[1:]).strip()
         if _remainder_ok(rest):
             return rest
-    # end strip leading 'The'  # StripThe
+    # end strip leading The  # StripThe
 
-    anchors = _anchors(category)
+    anchors = _anchors_from_name(category_name)
 
     for a in anchors:
         if not a:
@@ -154,6 +150,7 @@ def tile_display_text(category: dict, raw_word: str) -> str:
                 dropped_norm += max(1, len(_tokens(tok)))
                 continue
             kept.append(tok)
+        # end for
 
         rest = " ".join(kept).strip()
         rest = re.sub(r"^[\-–—:;,.]+\s*", "", rest).strip()
@@ -163,3 +160,15 @@ def tile_display_text(category: dict, raw_word: str) -> str:
         return raw
 
     return raw
+# end _tile_display_single
+
+
+# Return four display strings for the four category tokens. (Start)
+def tile_display_words(category_name: str, w1: str, w2: str, w3: str, w4: str) -> list[str]:
+    return [
+        _tile_display_single(category_name, w1),
+        _tile_display_single(category_name, w2),
+        _tile_display_single(category_name, w3),
+        _tile_display_single(category_name, w4),
+    ]
+# end tile_display_words
