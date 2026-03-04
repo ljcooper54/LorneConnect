@@ -1,78 +1,164 @@
-# File: App/ui_login.py | Created/Modified: 2026-02-25
 # Copyright 2025 H2so4 Consulting LLC
-"""Login UI.
-
-Shows a simple name entry dialog and guarantees that the Entry grabs keyboard focus on launch
-(especially important on macOS where focus can be lost at startup).
-"""
-
-from __future__ import annotations
+# 2026-03-03: Persist last login email in project .env; Return-to-submit on password; strip CR/LF.
+# Login screen with whitelist + password support. (Start)
 
 import tkinter as tk
 from tkinter import messagebox
+import re
+from pathlib import Path
 
-from .utils import normalize_token
+
+# Resolve the project root .env: .../Connections/App/ui_login.py -> .../Connections/.env
+ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
+LAST_LOGIN_KEY = "LORNECONNECTIONS_LAST_LOGIN"
 
 
-# This LoginWindow renders the login screen and returns the user name via callback. (Start)
-class LoginWindow:
-    """Login screen with a focused Entry widget."""
+# Read a single key from a .env file. (Start)
+def _dotenv_get(path: Path, key: str) -> str:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return ""
 
-    # This initializes the login UI and schedules initial focus. (Start)
-    def __init__(self, root: tk.Tk, callback):
-        self.root = root
-        self.callback = callback
+    prefix = key + "="
+    for line in lines:
+        s = line.strip()
+        if (not s) or s.startswith("#"):
+            continue
+        if s.startswith(prefix):
+            return s[len(prefix):].strip().strip('"').strip("'")
+    return ""
+# end _dotenv_get
 
-        self.frame = tk.Frame(root)
-        self.frame.pack(padx=22, pady=22)
 
-        title = tk.Label(self.frame, text="Enter your name", font=("Helvetica", 16, "bold"))
-        title.pack(pady=(0, 12))
+# Set/update a single key in a .env file while preserving everything else. (Start)
+def _dotenv_set(path: Path, key: str, value: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
 
-        self.entry = tk.Entry(self.frame, width=28, font=("Helvetica", 14))
-        self.entry.pack(pady=(0, 10))
-        self.entry.bind("<Return>", lambda _e: self.submit())
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        lines = []
 
-        btn = tk.Button(self.frame, text="Continue", width=12, command=self.submit)
-        btn.pack()
+    prefix = key + "="
+    out: list[str] = []
+    replaced = False
 
-        hint = tk.Label(self.frame, text="(Press Return to continue)", font=("Helvetica", 11))
-        hint.pack(pady=(10, 0))
+    for line in lines:
+        s = line.strip()
+        if s.startswith(prefix):
+            out.append(f"{key}={value}")
+            replaced = True
+        else:
+            out.append(line)
 
-        # Force keyboard focus into the Entry after Tk maps the widgets. (Start)
-        self.root.after_idle(self._force_initial_focus)
-        # end focus scheduling
-    # end def __init__  # __init__
+    if not replaced:
+        if out and out[-1].strip() != "":
+            out.append("")
+        out.append(f"{key}={value}")
 
-    # This forces focus into the Entry and raises the window (macOS-friendly). (Start)
-    def _force_initial_focus(self) -> None:
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")
+# end _dotenv_set
+
+
+class LoginWindow(tk.Toplevel):
+    # Create and manage the login dialog window. (Start)
+    def __init__(self, parent, db, on_success):
+        super().__init__(parent)
+        self.parent = parent
+        self.db = db
+        self.on_success = on_success
+
+        self.title("Login")
+        self.resizable(False, False)
+
+        self.transient(parent)
+        self.grab_set()
+
+        tk.Label(self, text="Email").pack(padx=20, pady=(20, 5))
+        self.email_entry = tk.Entry(self, width=40)
+        self.email_entry.bind("<Return>", lambda _e: self.submit())
+        self.email_entry.pack(padx=20)
+
+        last = _dotenv_get(ENV_PATH, LAST_LOGIN_KEY).strip()
+        if last:
+            self.email_entry.insert(0, last)
+            self.email_entry.select_range(0, tk.END)
+
+        tk.Label(self, text="Password").pack(padx=20, pady=(15, 5))
+        self.password_entry = tk.Entry(self, width=40, show="*")
+        self.password_entry.bind("<Return>", lambda _e: self.submit())
+        self.password_entry.pack(padx=20)
+
+        tk.Button(self, text="Login", command=self.submit).pack(pady=20)
+
+        self.email_entry.focus_set()
+    # end __init__
+
+    # Validate simple email format. (Start)
+    def _valid_email(self, email: str) -> bool:
+        return bool(re.match(r"^[^@]+@[^@]+\.[^@]+$", email))
+    # end _valid_email
+
+    # Submit login attempt. (Start)
+    def submit(self):
         try:
-            self.root.lift()
-            self.root.attributes("-topmost", True)
-            self.root.update_idletasks()
+            email = self.email_entry.get().strip().lower()
+            raw = self.password_entry.get()
+            raw = raw.replace("\r", "").replace("\n", "")
+            password = raw.strip()
 
-            self.entry.focus_force()
-            self.entry.selection_range(0, tk.END)
-            self.entry.icursor(tk.END)
+            if not self._valid_email(email):
+                messagebox.showerror("Invalid Email", "Enter a valid email address.", parent=self)
+                return
 
-            self.root.attributes("-topmost", False)
-        except tk.TclError:
-            pass
-        # end try/except
-    # end def _force_initial_focus  # _force_initial_focus
+            # Persist last login across runs.
+            try:
+                _dotenv_set(ENV_PATH, LAST_LOGIN_KEY, email)
+            except Exception:
+                # Non-fatal: login can still proceed even if .env is not writable.
+                pass
 
-    # This validates input and calls the callback with the normalized user name. (Start)
-    def submit(self) -> None:
-        name_raw = self.entry.get()
-        name = normalize_token(name_raw)
+            # Must exist (whitelist)
+            if not self.db.user_exists(email):
+                messagebox.showerror("Not Authorized", "This email is not authorized.", parent=self)
+                return
 
-        if not name:
-            messagebox.showerror("Name Required", "Please enter your name.", parent=self.root)
-            self._force_initial_focus()
-            return
-        # end if
+            # First login: no password set yet
+            has_password = True
+            if hasattr(self.db, "user_has_password"):
+                has_password = self.db.user_has_password(email)
 
-        self.callback(name)
-    # end def submit  # submit
+            if not has_password:
+                if not password:
+                    messagebox.showerror("Set Password", "Please enter a password.", parent=self)
+                    return
 
-# end class LoginWindow  # LoginWindow
+                # Support either method name
+                if hasattr(self.db, "set_user_password"):
+                    self.db.set_user_password(email, password)
+                else:
+                    self.db.set_password(email, password)
+
+                messagebox.showinfo("Password Set", "Password created successfully.", parent=self)
+
+            else:
+                # Verify password
+                verified = False
+                if hasattr(self.db, "verify_user_password"):
+                    verified = self.db.verify_user_password(email, password)
+                else:
+                    verified = self.db.verify_password(email, password)
+
+                if not verified:
+                    messagebox.showerror("Login Failed", "Incorrect password.", parent=self)
+                    return
+
+            self.grab_release()
+            self.destroy()
+            self.on_success(email)
+
+        except Exception as e:
+            messagebox.showerror("Login Error", f"{type(e).__name__}: {e}", parent=self)
+    # end submit
+# end LoginWindow

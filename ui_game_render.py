@@ -96,9 +96,6 @@ def render_board(game) -> None:
                 height=2,
                 bg=bg,
                 relief=tk.GROOVE,
-                wraplength=160,
-                justify="center",
-                anchor="center",
             )
             lbl.bind("<Button-3>", lambda e, w=wtxt: game.right_click_word(e, w))
             lbl.bind("<Button-2>", lambda e, w=wtxt: game.right_click_word(e, w))
@@ -124,7 +121,7 @@ def render_board(game) -> None:
             bd=0,
             highlightthickness=0,
         )
-        border.grid(row=r, column=c, padx=10, pady=10, sticky="nsew")
+        border.grid(row=r, column=c, padx=6, pady=4, sticky="nsew")
         # end border frame
 
         # Inner label for the text; padding creates a constant border thickness. (Start)
@@ -132,17 +129,17 @@ def render_board(game) -> None:
             border,
             text=fmt_tile(wtxt),
             width=20,
-            height=4,
+            height=2,
             bg=game.TILE_BG,
             fg="black",
             font=("Helvetica", 14, "bold"),
-            wraplength=180,
+            wraplength=160,
             justify="center",
             anchor="center",
             relief=tk.FLAT,
             bd=0,
-            padx=10,
-            pady=10,
+            padx=6,
+            pady=4,
         )
         inner.pack(fill="both", expand=True, padx=4, pady=4)
         # end inner label
@@ -161,26 +158,5 @@ def render_board(game) -> None:
     # end grid
 
     refresh_tile_visuals(game)
-
-    # Force the toplevel to shrink to content (macOS Tk often won't shrink with geometry("")). (Start)
-    try:
-        game.root.update_idletasks()
-        # Remove any previous minsize constraints that could pin the old (taller) solved-area height. (Start)
-        try:
-            game.root.minsize(1, 1)
-        except Exception:
-            pass
-        # end minsize reset
-
-        req_w = game.root.winfo_reqwidth()
-        req_h = game.root.winfo_reqheight()
-        if req_w > 50 and req_h > 50:
-            game.root.geometry(f"{req_w}x{req_h}")
-        # end if
-
-        game.root.update_idletasks()
-    except Exception:
-        pass
-    # end force-shrink  # force_shrink
-
+    game.root.update_idletasks()
 # end def render_board  # render_board

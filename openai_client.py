@@ -73,6 +73,36 @@ Return ONLY the JSON object.
 
         text = resp.choices[0].message.content or ""
         return text
-    # end def generate_category_seed  # generate_category_seed
+    
+
+    # This explains a word in the context of a category in <=50 words, with up to 2 hyperlinks. (Start)
+    def explain_word(self, category: str, word: str) -> str:
+        """Return a short explanation (<=50 words) and optional 1-2 hyperlinks."""
+        cat = (category or "").strip()
+        w = (word or "").strip()
+
+        prompt = (
+            "Explain the word in the context of the category.\n"
+            f"Category: {cat}\n"
+            f"Word: {w}\n\n"
+            "Requirements:\n"
+            "- Max 50 words.\n"
+            "- If appropriate, include up to 2 full https:// hyperlinks (each on its own line).\n"
+            "- Plain text only.\n"
+        )
+
+        resp = self._client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a concise explainer. Keep within limits."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
+        )
+
+        text = (resp.choices[0].message.content or "").strip()
+        return text
+    # end def explain_word  # explain_word
+# end def generate_category_seed  # generate_category_seed
 
 # end class OpenAIClient  # OpenAIClient

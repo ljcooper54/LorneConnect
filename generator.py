@@ -1,5 +1,6 @@
 # File: App/generator.py
 # Copyright 2025 H2so4 Consulting LLC
+# 2026-03-02: Add staged bin relaxation and category swap on empty bins; prevent repeat-attempt failures; keep recent_n coercion.
 """Puzzle generator (v3+).
 
 Requirements implemented:
@@ -64,6 +65,42 @@ class PuzzleGenerator:
         "Purple": {4, 3},  # 4+3
     }
     # end bins  # BINS_STRICT/BINS_BROADENED
+
+    # This returns staged obscurity level sets for a target color. (Start)
+    def _bin_stage_sets(self, color: str) -> List[Set[int]]:
+        """Return staged allowed obscurity sets per spec: n; n+n-1; n-1+n+n+1; all."""
+        c = (color or "").strip()
+        n = None
+        for lvl, col in self.LEVEL_TO_COLOR.items():
+            if str(col).casefold() == str(c).casefold():
+                n = int(lvl)
+                break
+            # end if
+        # end for
+        if n is None:
+            n = 2
+        # end if
+
+        stages: List[Set[int]] = []
+        def clamp(levels: Set[int]) -> Set[int]:
+            return {x for x in levels if 1 <= int(x) <= 4}
+        # end def clamp  # clamp
+
+        stages.append(clamp({n}))
+        stages.append(clamp({n, n - 1}))
+        stages.append(clamp({n - 1, n, n + 1}))
+        stages.append({1, 2, 3, 4})
+
+        # Deduplicate while preserving order. (Start)
+        uniq: List[Set[int]] = []
+        for s in stages:
+            if s and s not in uniq:
+                uniq.append(s)
+            # end if
+        # end for
+        return uniq
+        # end return
+    # end def _bin_stage_sets  # _bin_stage_sets
 
     # This initializes generator state. (Start)
     def __init__(self, db):
@@ -447,6 +484,20 @@ class PuzzleGenerator:
             raise RuntimeError("Missing user.")
         # end if
 
+        # Defensive: some callers may pass recent_n=[] by mistake. (Start)
+        try:
+            if isinstance(recent_n, (list, tuple)):
+                recent_n = 0
+            elif recent_n is None:
+                recent_n = 0
+            else:
+                recent_n = int(recent_n)
+            # end if
+        except Exception:
+            recent_n = 0
+        # end try/except
+        # end defensive recent_n coercion
+
         # Resolve categories first (Surprise Me! supported). (Start)
         categories = self._finalize_categories(user=u, selections=subjects)
         # end resolve categories
@@ -480,42 +531,107 @@ class PuzzleGenerator:
                 bins_used = self.BINS_STRICT
                 # end color assignment
 
-                # Build groups according to assignments and bin level sets. (Start)
+                # Build groups according to assignments with staged bin relaxation. (Start)
                 groups: List[Dict] = []
-                for idx in range(4):
-                    cid = f"C{idx}"
-                    color = assignment[cid]
-                    bin_levels = bins_used[color]
 
-                    # Create a pool from the assigned bin levels. (Start)
-                    pool: List[str] = []
-                    for lvl in sorted(bin_levels):
-                        pool.extend(cat_buckets[idx].get(lvl, []))
-                    # end for
-                    # end pool creation
+                # We may need to swap out a category if it cannot supply 4 words even after relaxation. (Start)
+                max_swaps = 12
+                swaps_used = 0
 
-                    # Ensure we have enough words. (Start)
-                    if len(pool) < 4:
-                        raise RuntimeError(f"Not enough words in bin for {categories[idx]} color={color} pool={len(pool)}")
-                    # end if
+                class _CategoryUnplayable(Exception):
+                    pass
+                # end class _CategoryUnplayable  # _CategoryUnplayable
 
-                    random.shuffle(pool)
-                    selected = pool[:4]
+                while True:
+                    try:
+                        groups = []
+                        used_words: Set[str] = set()
 
-                    # Validate the group. (Start)
-                    validate_group(categories[idx], selected)
-                    # end validate group
+                        for idx in range(4):
+                            cid = f"C{idx}"
+                            color = assignment[cid]
 
-                    groups.append(
-                        {
-                            "category": categories[idx].strip(),
-                            "category_key": normalize_token(categories[idx]),
-                            "color": str(color).strip().casefold(),
-                            "words": selected,
-                        }
-                    )
-                    # end append group
-                # end for
+                            stage_sets = self._bin_stage_sets(color)
+                            selected: List[str] | None = None
+
+                            # Try staged relaxation: n; n+n-1; n-1+n+n+1; all. (Start)
+                            for allowed_levels in stage_sets:
+                                pool: List[str] = []
+                                for lvl in sorted(allowed_levels):
+                                    pool.extend(cat_buckets[idx].get(lvl, []))
+                                # end for lvl
+
+                                # Enforce global uniqueness across all 16 tiles. (Start)
+                                pool = [w for w in pool if w not in used_words]
+                                # end uniqueness filter
+
+                                if len(pool) >= 4:
+                                    random.shuffle(pool)
+                                    selected = pool[:4]
+                                    break
+                                # end if
+                            # end for allowed_levels
+                            # end staged relaxation
+
+                            if not selected:
+                                # Even after full relaxation this category cannot supply 4 unique words. (Start)
+                                raise _CategoryUnplayable(f"{categories[idx]} color={color}")
+                                # end raise
+                            # end if
+
+                            # Validate the group. (Start)
+                            validate_group(categories[idx], selected)
+                            # end validate group
+
+                            for w in selected:
+                                used_words.add(w)
+                            # end for
+
+                            groups.append(
+                                {
+                                    "category": categories[idx].strip(),
+                                    "category_key": normalize_token(categories[idx]),
+                                    "color": str(color).strip().casefold(),
+                                    "words": selected,
+                                }
+                            )
+                            # end append group
+                        # end for idx
+
+                        break  # success for this attempt
+                    except _CategoryUnplayable as ue:
+                        swaps_used += 1
+                        if swaps_used > max_swaps:
+                            raise RuntimeError(f"Not enough words after relaxation + swaps: {ue}")
+                        # end if
+
+                        # Swap out the failing category for a random alternative. (Start)
+                        failing = str(ue).split(" color=")[0].strip()
+                        existing_keys = {normalize_token(c) for c in categories}
+                        candidates = [c for c in self.db.list_categories(min_words=4) if normalize_token(c) not in existing_keys]
+
+                        if not candidates:
+                            raise RuntimeError(f"No replacement categories available (failed={failing}).")
+                        # end if
+
+                        replacement = random.choice(candidates)
+
+                        # Replace the first matching category name. (Start)
+                        for j, c in enumerate(categories):
+                            if c.strip() == failing:
+                                categories[j] = replacement
+                                cat_buckets[j] = self._build_buckets_for_category(user=u, category=replacement, recent_n=int(recent_n))
+                                break
+                            # end if
+                        # end for
+                        # end replace
+
+                        # Recompute color assignment after swap (buckets changed). (Start)
+                        assignment = self._assign_colors_reverse_greedy(cat_buckets, self.BINS_STRICT)
+                        # end recompute assignment
+                        continue
+                    # end try/except
+                # end while
                 # end build groups
 
                 # Record picks so future games can avoid repeats. (Start)

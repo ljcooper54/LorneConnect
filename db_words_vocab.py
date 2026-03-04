@@ -10,7 +10,6 @@ Implements get_usable_words() filtering:
 - wrong_category (category)
 - too_ambiguous (category, if present)
 - inappropriate (user)
-- too_hard (user)
 - recent picks (PER USER + PER CATEGORY)
 - exclude_words set
 """
@@ -188,7 +187,6 @@ class DBVocab:
 
         # Per-user bans. (Start)
         user_bad = set(self.get_user_inappropriate_words(user))
-        user_hard = set(self.get_user_too_hard_words(user))
         # end per-user bans
 
         # Recent picks for this user + category. (Start)
@@ -228,14 +226,13 @@ class DBVocab:
         ex = {normalize_token(w) for w in (exclude_words or set())}
         rec = {normalize_token(w) for w in recent}
         bad = {normalize_token(w) for w in user_bad}
-        hard = {normalize_token(w) for w in user_hard}
 
         for w, o in rows:
             ww = normalize_token(w)
             if not ww:
                 continue
             # end if
-            if ww in ex or ww in rec or ww in bad or ww in hard:
+            if ww in ex or ww in rec or ww in bad:
                 continue
             # end if
             try:

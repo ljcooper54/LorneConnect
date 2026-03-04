@@ -4,10 +4,11 @@
 
 Flags:
 - inappropriate (excluded for this user)
-- too_hard (excluded for this user)
+- too_hard (legacy; may be used for exclusion)
+- obscurity_delta (signed adjustment; Too Easy=-1, Too Hard=+1)
 
 Schema:
-- Adds user_word_flags.too_hard if missing.
+- Adds user_word_flags.too_hard and user_word_flags.obscurity_delta if missing.
 """
 
 from __future__ import annotations
@@ -38,13 +39,21 @@ class DBUserWordFlags:
     # This ensures user_word_flags has too_hard column. (Start)
     def _ensure_user_word_flags_cols(self) -> None:
         cols = self._table_columns("user_word_flags")
-        if "too_hard" in cols:
+        # Ensure required columns exist. (Start)
+        if "too_hard" in cols and "obscurity_delta" in cols:
             return
         # end if
         try:
             with self.lock:
                 cur = self.conn.cursor()
-                cur.execute("ALTER TABLE user_word_flags ADD COLUMN too_hard INTEGER NOT NULL DEFAULT 0")
+                cols2 = self._table_columns("user_word_flags")
+                if "too_hard" not in cols2:
+                    cur.execute("ALTER TABLE user_word_flags ADD COLUMN too_hard INTEGER NOT NULL DEFAULT 0")
+                # end if
+                cols2 = self._table_columns("user_word_flags")
+                if "obscurity_delta" not in cols2:
+                    cur.execute("ALTER TABLE user_word_flags ADD COLUMN obscurity_delta INTEGER NOT NULL DEFAULT 0")
+                # end if
                 self.conn.commit()
             # end with
         except Exception:
@@ -113,6 +122,64 @@ class DBUserWordFlags:
     # This returns user-too-hard words. (Start)
     def get_user_too_hard_words(self, user: str) -> list[str]:
         return self._get_user_flagged_words(user, "too_hard")
-    # end def get_user_too_hard_words  # get_user_too_hard_words
+    
+
+    # This records an obscurity transition for a user+word (delta may be negative). (Start)
+    def transition_word_obscurity(self, user: str, word: str, delta: int) -> None:
+        u = normalize_token(user)
+        w = normalize_token(word)
+        if not u or not w:
+            return
+        # end if
+
+        try:
+            d = int(delta)
+        except Exception:
+            d = 0
+        # end try/except
+        if d == 0:
+            return
+        # end if
+
+        self._ensure_user_word_flags_cols()
+
+        with self.lock:
+            cur = self.conn.cursor()
+            cur.execute("INSERT OR IGNORE INTO user_word_flags(user, word, created_at) VALUES(?,?,?)", (u, w, time.time()))
+            cur.execute(
+                "UPDATE user_word_flags SET obscurity_delta = COALESCE(obscurity_delta, 0) + ? WHERE user=? AND word=?",
+                (d, u, w),
+            )
+            self.conn.commit()
+        # end with
+    # end def transition_word_obscurity  # transition_word_obscurity
+
+    # This returns the signed obscurity adjustment for a user+word. (Start)
+    def get_user_obscurity_adjust(self, user: str, word: str) -> int:
+        u = normalize_token(user)
+        w = normalize_token(word)
+        if not u or not w:
+            return 0
+        # end if
+
+        self._ensure_user_word_flags_cols()
+        cols = self._table_columns("user_word_flags")
+        if "obscurity_delta" not in cols:
+            return 0
+        # end if
+
+        with self.lock:
+            cur = self.conn.cursor()
+            cur.execute("SELECT obscurity_delta FROM user_word_flags WHERE user=? AND word=?", (u, w))
+            row = cur.fetchone()
+        # end with
+
+        try:
+            return int(row[0]) if row and row[0] is not None else 0
+        except Exception:
+            return 0
+        # end try/except
+    # end def get_user_obscurity_adjust  # get_user_obscurity_adjust
+# end def get_user_too_hard_words  # get_user_too_hard_words
 
 # end class DBUserWordFlags  # DBUserWordFlags

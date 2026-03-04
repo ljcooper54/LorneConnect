@@ -96,6 +96,9 @@ class PuzzleGame:
         self.hint_category_key: str | None = None
         self.hint_progress_count: int = 0
         self.hint_selected_idxs: set[int] = set()
+        # Explain popups (non-blocking); track so we can close on quit/new game. (Start)
+        self.explain_windows: list[tk.Toplevel] = []
+        # end explain popups
         # end selection + hint state
 
         # Root frame. (Start)
@@ -154,6 +157,20 @@ class PuzzleGame:
         # end tiles
     # end def _build_subframes  # _build_subframes
 
+
+    # This closes all open Explain windows. (Start)
+    def close_explain_windows(self) -> None:
+        wins = list(getattr(self, "explain_windows", []) or [])
+        self.explain_windows = []
+        for w in wins:
+            try:
+                w.destroy()
+            except Exception:
+                pass
+            # end try/except
+        # end for
+    # end def close_explain_windows  # close_explain_windows
+
     # This toggles tile selection. (Start)
     def toggle(self, idx: int) -> None:
         toggle_selection(self, idx)
@@ -176,6 +193,7 @@ class PuzzleGame:
 
     # This quits the app. (Start)
     def quit_game(self) -> None:
+        self.close_explain_windows()
         quit_game(self)
     # end def quit_game  # quit_game
 
@@ -192,11 +210,13 @@ class PuzzleGame:
         # end if
 
         if choice == "new":
+            self.close_explain_windows()
             new_categories(self)
             return
         # end if
 
         # choice == "restart"
+        self.close_explain_windows()
         self._restart_same_categories()
     # end def restart_clicked  # restart_clicked
 

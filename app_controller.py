@@ -1,5 +1,6 @@
 # File: App/app_controller.py | Created/Modified: 2026-02-26
 # Copyright 2025 H2so4 Consulting LLC
+# 2026-03-02: Fix generator.generate() call to pass recent_n as int; improve error reporting.
 """App controller.
 
 Fixes:
@@ -12,6 +13,7 @@ from __future__ import annotations
 
 import queue
 import threading
+import traceback
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox
@@ -66,12 +68,12 @@ class App:
     # This shows the login UI. (Start)
     def _show_login(self) -> None:
         self._clear_frames()
-        LoginWindow(self.root, self.after_login)
+        LoginWindow(self.root, self.db, self.after_login)
     # end def _show_login  # _show_login
 
     # This handles login completion. (Start)
     def after_login(self, user: str) -> None:
-        self.user = normalize_token(user)
+        self.user = (user or '').strip().lower()
         self.db.ensure_user_stats(self.user or "")
         self._show_subjects()
     # end def after_login  # after_login
@@ -164,40 +166,11 @@ class App:
                 # end for
 
                 puzzle = self.generator.generate(user, selected_subjects, recent_n=0)
-                # Normalize older generator payloads (rows->groups). (Start)
-                if isinstance(puzzle, dict) and "groups" not in puzzle and "rows" in puzzle:
-                    puzzle["groups"] = puzzle.get("rows")
-                # end normalize
-
-                # Retry a few times if generator returns an incomplete puzzle. (Start)
-                attempts_left = 2
-                while True:
-                    groups = puzzle.get("groups") if isinstance(puzzle, dict) else None
-                    ok = (
-                        isinstance(groups, list)
-                        and len(groups) == 4
-                        and all(isinstance(g, dict) and isinstance(g.get("words"), list) and len(g.get("words")) == 4 for g in groups)
-                    )
-                    if ok:
-                        break
-                    # end if
-
-                    if attempts_left <= 0:
-                        raise RuntimeError(f"Generator returned invalid groups (need 4x4). Got: {repr(puzzle)[:1200]}")
-                    # end if
-
-                    attempts_left -= 1
-                    puzzle = self.generator.generate(user, selected_subjects, recent_n=0)
-                    if isinstance(puzzle, dict) and "groups" not in puzzle and "rows" in puzzle:
-                        puzzle["groups"] = puzzle.get("rows")
-                    # end if
-                # end while
-                # end retry
                 q.put(("ok", puzzle))
             except CategoryTooNarrowError as e:
                 q.put(("too_narrow", e))
             except Exception as e:
-                q.put(("err", str(e)))
+                q.put(("err", f"{type(e).__name__}: {e}\n\n{traceback.format_exc()}"))
             # end try/except
         # end def worker  # worker
 
@@ -251,6 +224,12 @@ class App:
             # end if
 
             puzzle = payload
+            if puzzle is None:
+                messagebox.showerror("Puzzle Generation Failed", "Generator returned none.", parent=self.root)
+                subject_window.enable()
+                return
+            # end if
+
             if not isinstance(puzzle, dict) or "groups" not in puzzle:
                 messagebox.showerror("Puzzle Generation Failed", "Generator returned invalid puzzle data.", parent=self.root)
                 subject_window.enable()

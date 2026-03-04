@@ -14,6 +14,16 @@ Provides:
 from __future__ import annotations
 
 from typing import Iterable
+# Copyright 2025 H2so4 Consulting LLC
+# 2026-03-02: Added missing imports for auth hashing and reset token support.
+
+import os
+import hashlib
+import base64
+import hmac
+import secrets
+import sqlite3
+import time
 
 from .utils import normalize_token
 
@@ -239,5 +249,214 @@ class DBStatsSubjects:
             return [normalize_token(r[0]) for r in cur.fetchall() if r and r[0]]
         # end with
     # end def list_all_subjects  # list_all_subjects
+
+    # This ensures required user-auth tables exist. (Start)
+    def _ensure_users_schema(self) -> None:
+        with self.lock:
+            cur = self.conn.cursor()
+            cur.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS users (
+                    email TEXT PRIMARY KEY,
+                    password_hash TEXT,
+                    reset_token TEXT,
+                    reset_created_at REAL
+                )
+                '''
+            )
+            self.conn.commit()
+        # end with
+    # end def _ensure_users_schema  # _ensure_users_schema
+
+    # This normalizes an email for consistent lookups. (Start)
+    def _norm_email(self, email: str) -> str:
+        e = normalize_token(email).strip().lower()
+        return e
+    # end def _norm_email  # _norm_email
+
+    # This returns True if the user exists in the whitelist. (Start)
+    def user_exists(self, email: str) -> bool:
+        self._ensure_users_schema()
+        e = self._norm_email(email)
+        if not e:
+            return False
+        # end if
+        with self.lock:
+            cur = self.conn.cursor()
+            cur.execute("SELECT 1 FROM users WHERE email = ? LIMIT 1", (e,))
+            return cur.fetchone() is not None
+        # end with
+    # end def user_exists  # user_exists
+
+    # This returns the stored password hash (or None). (Start)
+    def get_user_password_hash(self, email: str) -> str | None:
+        self._ensure_users_schema()
+        e = self._norm_email(email)
+        if not e:
+            return None
+        # end if
+        with self.lock:
+            cur = self.conn.cursor()
+            cur.execute("SELECT password_hash FROM users WHERE email = ? LIMIT 1", (e,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            # end if
+            ph = row[0]
+            return ph if ph else None
+        # end with
+    # end def get_user_password_hash  # get_user_password_hash
+
+    # This returns True if the user has a non-blank password set. (Start)
+    def user_has_password(self, email: str) -> bool:
+        ph = self.get_user_password_hash(email)
+        return bool(ph and str(ph).strip())
+    # end def user_has_password  # user_has_password
+
+    # This creates a whitelisted user. Blank password leaves password_hash NULL. (Start)
+    def create_user(self, email: str, password: str = "") -> None:
+        self._ensure_users_schema()
+        e = self._norm_email(email)
+        if not e:
+            raise ValueError("email is blank")
+        # end if
+        with self.lock:
+            cur = self.conn.cursor()
+            cur.execute("INSERT OR IGNORE INTO users(email, password_hash) VALUES(?, NULL)", (e,))
+            self.conn.commit()
+        # end with
+        if password and password.strip():
+            self.set_password(e, password)
+        # end if
+    # end def create_user  # create_user
+
+    # This hashes a password with PBKDF2-SHA256. (Start)
+    def _hash_password(self, password: str, iterations: int = 240_000) -> str:
+        pw = password.encode("utf-8")
+        salt = os.urandom(16)
+        dk = hashlib.pbkdf2_hmac("sha256", pw, salt, iterations, dklen=32)
+        return "pbkdf2_sha256$%d$%s$%s" % (
+            iterations,
+            base64.urlsafe_b64encode(salt).decode("ascii").rstrip("="),
+            base64.urlsafe_b64encode(dk).decode("ascii").rstrip("="),
+        )
+    # end def _hash_password  # _hash_password
+
+    # This verifies a password hash in pbkdf2_sha256$... format. (Start)
+    def _verify_password_hash(self, password: str, stored: str) -> bool:
+        try:
+            parts = stored.split("$")
+            if len(parts) != 4 or parts[0] != "pbkdf2_sha256":
+                return False
+            # end if
+            iterations = int(parts[1])
+            salt = base64.urlsafe_b64decode(parts[2] + "==")
+            expected = base64.urlsafe_b64decode(parts[3] + "==")
+            dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations, dklen=len(expected))
+            return hmac.compare_digest(dk, expected)
+        except Exception:
+            return False
+        # end try/except
+    # end def _verify_password_hash  # _verify_password_hash
+
+    # This sets the user's password. (Start)
+    def set_password(self, email: str, password: str) -> None:
+        self._ensure_users_schema()
+        e = self._norm_email(email)
+        if not e:
+            raise ValueError("email is blank")
+        # end if
+        if not password or not password.strip():
+            raise ValueError("password is blank")
+        # end if
+        ph = self._hash_password(password)
+        with self.lock:
+            cur = self.conn.cursor()
+            cur.execute("UPDATE users SET password_hash = ?, reset_token = NULL, reset_created_at = NULL WHERE email = ?", (ph, e))
+            if cur.rowcount == 0:
+                # Not whitelisted; do not auto-create.
+                raise ValueError("user not authorized")
+            # end if
+            self.conn.commit()
+        # end with
+    # end def set_password  # set_password
+
+    # This is a compatibility alias for older UI code. (Start)
+    def set_user_password(self, email: str, password: str) -> None:
+        self.set_password(email, password)
+    # end def set_user_password  # set_user_password
+
+    # This verifies the user password. (Start)
+    def verify_password(self, email: str, password: str) -> bool:
+        stored = self.get_user_password_hash(email)
+        if not stored:
+            return False
+        # end if
+        return self._verify_password_hash(password, stored)
+    # end def verify_password  # verify_password
+
+    # This is a compatibility alias for older UI code. (Start)
+    def verify_user_password(self, email: str, password: str) -> bool:
+        return self.verify_password(email, password)
+    # end def verify_user_password  # verify_user_password
+
+    # This creates a reset token for a whitelisted email and returns it. (Start)
+    def create_reset_token(self, email: str) -> str:
+        self._ensure_users_schema()
+        e = self._norm_email(email)
+        if not e:
+            raise ValueError("email is blank")
+        # end if
+        token = base64.urlsafe_b64encode(os.urandom(24)).decode("ascii").rstrip("=")
+        now = float(time.time())
+        with self.lock:
+            cur = self.conn.cursor()
+            cur.execute(
+                "UPDATE users SET reset_token = ?, reset_created_at = ? WHERE email = ?",
+                (token, now, e),
+            )
+            if cur.rowcount == 0:
+                raise ValueError("user not authorized")
+            # end if
+            self.conn.commit()
+        # end with
+        return token
+    # end def create_reset_token  # create_reset_token
+
+    # This resets a password using a token and clears it after use. (Start)
+    def reset_password_with_token(self, token: str, new_password: str, max_age_seconds: int = 3600) -> str | None:
+        self._ensure_users_schema()
+        t = normalize_token(token).strip()
+        if not t:
+            return None
+        # end if
+        with self.lock:
+            cur = self.conn.cursor()
+            cur.execute(
+                "SELECT email, reset_created_at FROM users WHERE reset_token = ? LIMIT 1",
+                (t,),
+            )
+            row = cur.fetchone()
+        # end with
+        if not row:
+            return None
+        # end if
+        email, created_at = row[0], row[1]
+        if created_at is None:
+            return None
+        # end if
+        age = float(time.time()) - float(created_at)
+        if age < 0 or age > float(max_age_seconds):
+            return None
+        # end if
+        self.set_password(email, new_password)
+
+        with self.lock:
+            cur = self.conn.cursor()
+            cur.execute("UPDATE users SET reset_token = NULL, reset_created_at = NULL WHERE email = ?", (email,))
+            self.conn.commit()
+        # end with
+        return email
+    # end def reset_password_with_token  # reset_password_with_token
 
 # end class DBStatsSubjects  # DBStatsSubjects
