@@ -478,25 +478,11 @@ class PuzzleGenerator:
     # end def _build_buckets_for_category  # _build_buckets_for_category
 
     # This generates a puzzle for the given user + selected subjects. (Start)
-    def generate(self, user: str, subjects: Sequence[str], recent_n: int = 20) -> Dict:
+    def generate(self, user: str, subjects: Sequence[str], recent_n: int = 16) -> Dict:
         u = normalize_token(user)
         if not u:
             raise RuntimeError("Missing user.")
         # end if
-
-        # Defensive: some callers may pass recent_n=[] by mistake. (Start)
-        try:
-            if isinstance(recent_n, (list, tuple)):
-                recent_n = 0
-            elif recent_n is None:
-                recent_n = 0
-            else:
-                recent_n = int(recent_n)
-            # end if
-        except Exception:
-            recent_n = 0
-        # end try/except
-        # end defensive recent_n coercion
 
         # Resolve categories first (Surprise Me! supported). (Start)
         categories = self._finalize_categories(user=u, selections=subjects)

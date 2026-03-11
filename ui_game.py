@@ -271,7 +271,7 @@ class PuzzleGame:
         # end reset
 
         try:
-            puzzle = self.generator.generate(self.user, subjects, recent_n=0)
+            puzzle = self.generator.generate(self.user, subjects, recent_n=16)
         except Exception as e:
             self.status.config(text=f"Restart failed: {type(e).__name__}: {e}")
             return

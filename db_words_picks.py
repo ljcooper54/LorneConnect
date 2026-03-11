@@ -37,7 +37,7 @@ class DBPicks:
     # end def _ensure_word_picks_schema  # _ensure_word_picks_schema
 
     # This returns last N picked words for a user+category. (Start)
-    def get_last_n_picks(self, user: str, category: str, n: int = 20) -> list[str]:
+    def get_last_n_picks(self, user: str, category: str, n: int = 16) -> list[str]:
         self._ensure_word_picks_schema()
 
         u = normalize_token(user)
@@ -49,7 +49,7 @@ class DBPicks:
         try:
             lim = int(n)
         except Exception:
-            lim = 20
+            lim = 16
         # end try/except
         lim = max(0, min(500, lim))
 
