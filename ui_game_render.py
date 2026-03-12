@@ -1,25 +1,19 @@
-# File: App/ui_game_render.py | Created/Modified: 2026-02-26
+# File: App/ui_game_render.py | Created/Modified: 2026-03-12
 # Copyright 2025 H2so4 Consulting LLC
 """Rendering + visuals for PuzzleGame.
 
-Fix #1 (macOS Tk selection reliability):
-- Do NOT use highlightbackground/highlightcolor as the primary selection cue.
-  On macOS Tk, highlight borders often behave like focus rings and can render
-  partially (L-shape) or only for the focused widget.
-- Instead, each tile is a frame "border" whose background we control, with an
-  inner label for text. Selection/hint/solved becomes stable and persistent.
-
-Also:
-- Shuffle unsolved tiles so categories are scattered.
-- Larger board: bigger tiles + spacing, without geometry "jump" when selected.
+Fixes:
+- Keep the active board in a 4-column grid with equal column weights.
+- Use stable tile sizing that fits four columns without clipping the fourth column.
+- Recompute the top-level minimum size from actual rendered content after each board refresh.
 """
 
 from __future__ import annotations
 
-from .tile_text import tile_display_words
-import tkinter as tk
 import random
+import tkinter as tk
 
+from .tile_text import tile_display_words
 from .utils import split_camel_case_display
 
 
@@ -28,6 +22,7 @@ def fmt_tile(raw: str) -> str:
     s = split_camel_case_display(raw or "")
     parts = [p for p in s.split() if p]
 
+    # This capitalizes a single token without altering the rest. (Start)
     def cap_token(t: str) -> str:
         if not t:
             return t
@@ -88,7 +83,7 @@ def render_board(game) -> None:
         display_by_word[words[1]] = d2
         display_by_word[words[2]] = d3
         display_by_word[words[3]] = d4
-    # end build display labels  # display_by_word
+    # end for
 
     # Collision handling: revert colliding display strings to the original raw token. (Start)
     key_to_words: dict[str, list[str]] = {}
@@ -104,34 +99,41 @@ def render_board(game) -> None:
             for raw in raws:
                 display_by_word[raw] = raw
             # end for
+        # end if
     # end for
-    # end collision handling  # collisions
+    # end collision handling
 
     # Solved rows. (Start)
-    for g in game.solved_groups:
+    for solved_idx, g in enumerate(game.solved_groups):
         row = tk.Frame(game.solved_frame)
-        row.pack(pady=(0, 8), fill=tk.X)
+        row.grid(row=solved_idx, column=0, sticky="ew", pady=(0, 8))
+        row.grid_columnconfigure(0, weight=1)
 
         header = tk.Label(row, text=g["category"], font=("Helvetica", 12, "bold"))
-        header.pack(anchor="w")
+        header.grid(row=0, column=0, sticky="w")
 
         tiles_row = tk.Frame(row)
-        tiles_row.pack()
+        tiles_row.grid(row=1, column=0, sticky="ew")
+        for col in range(4):
+            tiles_row.grid_columnconfigure(col, weight=1, uniform="solvedtile")
+        # end for
 
         bg = game.COLORS.get(g.get("color", "yellow"), game.GREY_BG)
-        for wtxt in g["words"]:
+        for col, wtxt in enumerate(g["words"]):
             lbl = tk.Label(
                 tiles_row,
                 text=fmt_tile(display_by_word.get(wtxt, wtxt)),
-                width=20,
+                width=18,
                 height=2,
                 bg=bg,
                 relief=tk.GROOVE,
+                padx=6,
+                pady=4,
             )
             lbl.bind("<Button-3>", lambda e, w=wtxt: game.right_click_word(e, w))
             lbl.bind("<Button-2>", lambda e, w=wtxt: game.right_click_word(e, w))
             lbl.bind("<Control-Button-1>", lambda e, w=wtxt: game.right_click_word(e, w))
-            lbl.pack(side=tk.LEFT, padx=4, pady=3)
+            lbl.grid(row=0, column=col, padx=4, pady=3, sticky="ew")
         # end for
     # end for
     # end solved rows
@@ -141,11 +143,14 @@ def render_board(game) -> None:
     # end shuffle
 
     # Unsolved grid. (Start)
+    for row in range(4):
+        game.grid_frame.grid_rowconfigure(row, weight=1)
+    # end for
+
     for i, wtxt in enumerate(game.unsolved_words):
         r = i // 4
         c = i % 4
 
-        # Outer "border" frame controls outline color and never changes size. (Start)
         border = tk.Frame(
             game.grid_frame,
             bg=game.TILE_BG,
@@ -153,18 +158,16 @@ def render_board(game) -> None:
             highlightthickness=0,
         )
         border.grid(row=r, column=c, padx=6, pady=4, sticky="nsew")
-        # end border frame
 
-        # Inner label for the text; padding creates a constant border thickness. (Start)
         inner = tk.Label(
             border,
             text=fmt_tile(display_by_word.get(wtxt, wtxt)),
-            width=20,
+            width=18,
             height=2,
             bg=game.TILE_BG,
             fg="black",
             font=("Helvetica", 14, "bold"),
-            wraplength=160,
+            wraplength=150,
             justify="center",
             anchor="center",
             relief=tk.FLAT,
@@ -173,7 +176,6 @@ def render_board(game) -> None:
             pady=4,
         )
         inner.pack(fill="both", expand=True, padx=4, pady=4)
-        # end inner label
 
         # Bind clicks on BOTH widgets so selection is robust. (Start)
         for widget in (border, inner):
@@ -190,4 +192,8 @@ def render_board(game) -> None:
 
     refresh_tile_visuals(game)
     game.root.update_idletasks()
+    sync = getattr(game, "_sync_window_to_content", None)
+    if callable(sync):
+        sync(set_geometry=False)
+    # end if
 # end def render_board  # render_board

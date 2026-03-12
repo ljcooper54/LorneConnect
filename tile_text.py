@@ -1,5 +1,5 @@
+# 2026-03-12: Improve tile display minimization by stripping shared category-like prefix/suffix tokens (e.g. River, State) so tiles do not reveal their category.
 # Copyright 2025 H2so4 Consulting LLC
-# 2026-03-03: Word minimization for tile display: per-category API returning 4 display strings; caller handles collisions.
 
 from __future__ import annotations
 
@@ -16,6 +16,18 @@ _GENERIC_REMAINDERS = {
 # end _GENERIC_REMAINDERS  # _GENERIC_REMAINDERS
 
 
+# Common leading/trailing category nouns that often make tiles too revealing. (Start)
+_GENERIC_EDGE_WORDS = {
+    "river", "rivers", "state", "states", "nickname", "nicknames",
+    "city", "cities", "county", "counties", "mount", "mountain", "mountains",
+    "lake", "lakes", "sea", "seas", "ocean", "oceans",
+    "street", "streets", "road", "roads", "avenue", "avenues",
+    "president", "presidents", "king", "kings", "queen", "queens",
+    "saint", "st", "fort", "ft",
+}
+# end _GENERIC_EDGE_WORDS  # _GENERIC_EDGE_WORDS
+
+
 _ANCHOR_STOP = {
     # Common title-case words that are not proper-noun anchors.
     "a", "an", "and", "or", "of", "the", "in", "on", "to", "for", "with",
@@ -27,7 +39,7 @@ _ANCHOR_STOP = {
 _GENERIC_CATEGORY_SUFFIX = {
     "terms", "words", "things", "places", "people", "foods", "cities",
     "movies", "books", "songs", "bands", "teams",
-    "presidents", "states", "nicknames",
+    "presidents", "states", "nicknames", "rivers",
 }
 
 
@@ -49,7 +61,9 @@ def _tokens(s: str) -> list[str]:
     for t in tks:
         if t.endswith("'s"):
             t = t[:-2]
+        # end if
         out.append(t)
+    # end for
     return [t for t in out if t]
 # end _tokens
 
@@ -59,6 +73,7 @@ def _anchors_from_name(category_name: str) -> list[list[str]]:
     cat = (category_name or "").strip()
     if not cat:
         return []
+    # end if
 
     # Only use proper-noun-ish anchors: significant tokens from the category name.
     words = re.findall(r"[A-Za-z']+", cat.replace("’", "'"))
@@ -66,17 +81,23 @@ def _anchors_from_name(category_name: str) -> list[list[str]]:
     for w in words:
         if not w:
             continue
+        # end if
         w_norm = _norm(w)
         if not w_norm:
             continue
+        # end if
         if w_norm in _ANCHOR_STOP:
             continue
+        # end if
         if w_norm in _GENERIC_CATEGORY_SUFFIX:
             continue
+        # end if
         # Prefer longer anchors; keep short acronyms like US.
         if len(w_norm) < 4 and w_norm != "us":
             continue
+        # end if
         anchors.append([w_norm])
+    # end for
     # Deduplicate and sort longest-first.
     dedup: list[list[str]] = []
     seen = set()
@@ -85,6 +106,8 @@ def _anchors_from_name(category_name: str) -> list[list[str]]:
         if key not in seen:
             seen.add(key)
             dedup.append(a)
+        # end if
+    # end for
     dedup.sort(key=len, reverse=True)
     return dedup
 # end _anchors_from_name
@@ -95,39 +118,43 @@ def _remainder_ok(rest: str) -> bool:
     rest_norm = _norm(rest)
     if not rest_norm:
         return False
+    # end if
 
     toks = rest_norm.split()
     if len(toks) >= 2:
         return True
+    # end if
 
     single = toks[0]
     if single in _GENERIC_REMAINDERS:
         return False
-    if len(single) < 6:
+    # end if
+    if len(single) < 4:
         return False
+    # end if
     return True
 # end _remainder_ok
 
 
-# Compute a minimized display string for a single raw token. (Start)
-def _tile_display_single(category_name: str, raw_word: str) -> str:
+# Strip a leading category anchor from a raw tile when the remainder is useful. (Start)
+def _strip_category_anchor(category_name: str, raw_word: str) -> str:
     raw = (raw_word or "").strip()
     if not raw:
         return raw
+    # end if
 
     raw_tokens = raw.split()
-    if len(raw_tokens) < 2:
-        return raw
-
     raw_norm_tokens = _tokens(raw)
     if len(raw_norm_tokens) < 2:
         return raw
+    # end if
 
     # Always strip a leading 'The ' from multi-word tokens when the remainder is specific enough. (Start)
     if raw_norm_tokens and raw_norm_tokens[0] == "the":
         rest = " ".join(raw.split()[1:]).strip()
         if _remainder_ok(rest):
             return rest
+        # end if
     # end strip leading The  # StripThe
 
     anchors = _anchors_from_name(category_name)
@@ -135,6 +162,7 @@ def _tile_display_single(category_name: str, raw_word: str) -> str:
     for a in anchors:
         if not a:
             continue
+        # end if
 
         if raw_norm_tokens[: len(a)] == a:
             strip_n = len(a)
@@ -142,6 +170,7 @@ def _tile_display_single(category_name: str, raw_word: str) -> str:
             strip_n = len(a) + 1
         else:
             continue
+        # end if
 
         kept: list[str] = []
         dropped_norm = 0
@@ -149,6 +178,7 @@ def _tile_display_single(category_name: str, raw_word: str) -> str:
             if dropped_norm < strip_n:
                 dropped_norm += max(1, len(_tokens(tok)))
                 continue
+            # end if
             kept.append(tok)
         # end for
 
@@ -157,18 +187,129 @@ def _tile_display_single(category_name: str, raw_word: str) -> str:
 
         if _remainder_ok(rest):
             return rest
+        # end if
         return raw
+    # end for
 
     return raw
-# end _tile_display_single
+# end _strip_category_anchor
+
+
+# Find a shared leading token among all four tiles that should be stripped. (Start)
+def _shared_prefix_token(category_name: str, words: list[str]) -> str | None:
+    category_tokens = set(_tokens(category_name))
+    token_lists = [_tokens(w) for w in words if (w or "").strip()]
+    if len(token_lists) != 4:
+        return None
+    # end if
+    if any(len(toks) < 2 for toks in token_lists):
+        return None
+    # end if
+
+    first = token_lists[0][0]
+    if not all(toks[0] == first for toks in token_lists):
+        return None
+    # end if
+    if first in {"the", "a", "an"}:
+        return first
+    # end if
+    if first in category_tokens:
+        return first
+    # end if
+    if first in _GENERIC_EDGE_WORDS:
+        return first
+    # end if
+    return None
+# end _shared_prefix_token
+
+
+# Find a shared trailing token among all four tiles that should be stripped. (Start)
+def _shared_suffix_token(category_name: str, words: list[str]) -> str | None:
+    category_tokens = set(_tokens(category_name))
+    token_lists = [_tokens(w) for w in words if (w or "").strip()]
+    if len(token_lists) != 4:
+        return None
+    # end if
+    if any(len(toks) < 2 for toks in token_lists):
+        return None
+    # end if
+
+    last = token_lists[0][-1]
+    if not all(toks[-1] == last for toks in token_lists):
+        return None
+    # end if
+    if last in category_tokens:
+        return last
+    # end if
+    if last in _GENERIC_EDGE_WORDS:
+        return last
+    # end if
+    return None
+# end _shared_suffix_token
+
+
+# Strip one shared leading token if that makes the tile less revealing. (Start)
+def _strip_shared_prefix(raw_word: str, shared_prefix: str | None) -> str:
+    raw = (raw_word or "").strip()
+    if not raw or not shared_prefix:
+        return raw
+    # end if
+
+    raw_tokens = raw.split()
+    norm_tokens = _tokens(raw)
+    if len(norm_tokens) < 2:
+        return raw
+    # end if
+    if not norm_tokens or norm_tokens[0] != shared_prefix:
+        return raw
+    # end if
+
+    rest = " ".join(raw_tokens[1:]).strip()
+    if _remainder_ok(rest):
+        return rest
+    # end if
+    return raw
+# end _strip_shared_prefix
+
+
+# Strip one shared trailing token if that makes the tile less revealing. (Start)
+def _strip_shared_suffix(raw_word: str, shared_suffix: str | None) -> str:
+    raw = (raw_word or "").strip()
+    if not raw or not shared_suffix:
+        return raw
+    # end if
+
+    raw_tokens = raw.split()
+    norm_tokens = _tokens(raw)
+    if len(norm_tokens) < 2:
+        return raw
+    # end if
+    if not norm_tokens or norm_tokens[-1] != shared_suffix:
+        return raw
+    # end if
+
+    rest = " ".join(raw_tokens[:-1]).strip()
+    rest = re.sub(r"\s*[\-–—:;,.]+$", "", rest).strip()
+    if _remainder_ok(rest):
+        return rest
+    # end if
+    return raw
+# end _strip_shared_suffix
 
 
 # Return four display strings for the four category tokens. (Start)
 def tile_display_words(category_name: str, w1: str, w2: str, w3: str, w4: str) -> list[str]:
-    return [
-        _tile_display_single(category_name, w1),
-        _tile_display_single(category_name, w2),
-        _tile_display_single(category_name, w3),
-        _tile_display_single(category_name, w4),
-    ]
+    raws = [w1, w2, w3, w4]
+    stage1 = [_strip_category_anchor(category_name, w) for w in raws]
+
+    shared_prefix = _shared_prefix_token(category_name, stage1)
+    shared_suffix = _shared_suffix_token(category_name, stage1)
+
+    out: list[str] = []
+    for raw in stage1:
+        disp = _strip_shared_prefix(raw, shared_prefix)
+        disp = _strip_shared_suffix(disp, shared_suffix)
+        out.append(disp)
+    # end for
+    return out
 # end tile_display_words
